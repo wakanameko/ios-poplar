@@ -6,20 +6,33 @@
  *   - GICv3 Group 1 IRQ from the virtual timer (INTID 19 on Qualcomm)
  * Any unexpected exception paints a blue panic screen.
  */
+
+/*
+ * Note:
+ *	- DTBは海外版のをベースにしてる
+ * 
+ */
+
+// TODO
+// GICのアドレス変更
+// フレームバッファのアドレスどこ
+// 
+// 
+
 #include <stdint.h>
 #include "console.h"
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
 
-#define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
+#define IMEM_RESTART_REASON	0x146bf65cUL 	/* sweet: 0x146aa65cUL */	/* qcom,msm-imem restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
-#define PSHOLD			0x0c264000UL
+#define PSHOLD			0x10ac000UL 		/* sweet: 0x0c264000UL */
 
-#define GICD_BASE		0x17a00000UL
-#define GICR_BASE		0x17a60000UL
+#define GICD_BASE		0x17a00000UL		/* sweet: 0x17a00000UL */
+#define GICR_BASE		0x17b00000UL		/* sweet: 0x17a60000UL*/
 #define GICR_SIZE		0x100000UL
-#define GICR_PE_SIZE		0x20000UL
+#define GICR_PE_SIZE	0x20000UL
 #define GICR_TYPER		0x08
 #define GICR_WAKER		0x14
 #define GICR_SGI		0x10000
@@ -57,6 +70,17 @@ static inline void wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; 
 static inline void wr8(uintptr_t a, uint8_t v) { *(volatile uint8_t *)a = v; }
 
 extern char secondary_entry[];
+
+/*
+ * MPIDR (Aff2:Aff1:Aff0) of each core, from DT cpus/cpu@N reg.
+ * 	cpu@0..3     = little cluster (Aff1=0)
+ * 	cpu@100..103 = big cluster    (Aff1=1)
+ * Index i is the logical id passed to secondary_main() as context_id.
+ */
+static const uint64_t cpu_mpidr[NR_CPUS] = {
+	0x000, 0x001, 0x002, 0x003,
+	0x100, 0x101, 0x102, 0x103,
+};
 
 static const char *stage;	/* set at runtime: no absolute pointers in data */
 static volatile uint64_t sec_mpidr[NR_CPUS];
@@ -189,13 +213,28 @@ static void __attribute__((unused)) test_smp(void)
 	uint64_t self = rsr("mpidr_el1") & 0xffffff;
 	int64_t ret[NR_CPUS];
 
-	for (int i = 1; i < NR_CPUS; i++)
-		ret[i] = smc(PSCI_CPU_ON, (uint64_t)i << 8, (uintptr_t)secondary_entry, i);
-	delay_ms(500);
+	// Edited: Skip whichever entry when Boot CPU isn't assumed to be cpu@0.
 	for (int i = 1; i < NR_CPUS; i++) {
+		// ret[i] = smc(PSCI_CPU_ON, (uint64_t)i << 8, (uintptr_t)secondary_entry, i);	/* sweet */
+		ret[i] = 0;
+		if (cpu_mpidr[i] == self)
+			continue;
+		ret[i] = smc(PSCI_CPU_ON, cpu_mpidr[i], (uintptr_t)secondary_entry, i);
+	}
+	delay_ms(500);
+	// for (int i = 1; i < NR_CPUS; i++) {
+	// 	char label[] = "CPU0";
+	// 	label[3] = '0' + i;
+	// 	if (((uint64_t)i << 8) == self)
+	// 		con_str(label, "is boot cpu");
+	// 	else
+	// 		con_hex2(label, "ret=", (uint32_t)ret[i], "mpidr=",
+	// 			 (uint32_t)sec_mpidr[i] | (sec_mpidr[i] ? 0 : 0xdead0000));
+	// }	// sweet
+	for (int i = 0; i < NR_CPUS; i++) {
 		char label[] = "CPU0";
 		label[3] = '0' + i;
-		if (((uint64_t)i << 8) == self)
+		if (cpu_mpidr[i] == self)
 			con_str(label, "is boot cpu");
 		else
 			con_hex2(label, "ret=", (uint32_t)ret[i], "mpidr=",
@@ -377,7 +416,7 @@ void shim_main(uint64_t dtb)
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
-	con_str("SHIM", "sweet milestone 4: xnu loader");
+	con_str("SHIM", "poplar milestone 4: xnu loader");
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
@@ -405,7 +444,7 @@ void shim_main(uint64_t dtb)
 	if (rc)
 		con_clear(RED);
 
-	con_str("SHIM", "sweet milestone 3");
+	con_str("SHIM", "poplar milestone 3");
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("IMAGE", "lo=", mi.img_lo, "hi=", mi.img_hi);
@@ -419,7 +458,8 @@ void shim_main(uint64_t dtb)
 	con_hex("PAR img", mmu_probe((uintptr_t)shim_main));
 	con_hex("PAR fb", mmu_probe(FB_PHYS + 0x1000));
 	con_hex("PAR gic", mmu_probe(GICD_BASE));
-	con_hex("PAR 12G", mmu_probe(0x300000000UL));
+	con_hex("PAR 4G", mmu_probe(0x17ff00000UL));	/* top of 4GB DRAM (0x80000000 base) */
+	// con_hex("PAR 12G", mmu_probe(0x300000000UL));	/* sweet */
 	con_skip();
 	con_hex2("FILL us", "off=", to_us(fill_off), "on=", to_us(fill_on));
 	con_hex2("MEM us", "off=", to_us(mem_off), "on=", to_us(mem_on));

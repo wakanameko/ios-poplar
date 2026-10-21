@@ -8,12 +8,12 @@ _head:
 	b	_start			/* code0 */
 	.long	0			/* code1 */
 	.quad	0			/* text_offset */
-	.quad	_end			/* image_size (linked at 0) */
+	.quad	_end		/* image_size (linked at 0) */
 	.quad	0xa			/* flags: LE, 4K pages, place anywhere */
 	.quad	0			/* res2 */
 	.quad	0			/* res3 */
 	.quad	0			/* res4 */
-	.ascii	"ARM\x64"		/* magic */
+	.ascii	"ARM\x64"	/* magic */
 	.long	0			/* res5 (PE offset) */
 
 	.text

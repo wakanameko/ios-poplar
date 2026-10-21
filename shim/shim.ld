@@ -1,7 +1,7 @@
 ENTRY(_head)
 SECTIONS
 {
-	. = 0;
+	. = 0x8000; /* 0 -> 0x8000 */
 	.text : { *(.text.head) *(.text*) }
 	.rodata : { *(.rodata*) }
 	.data : { *(.data*) }
