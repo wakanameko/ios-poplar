@@ -83,6 +83,9 @@ int mmu_enable(struct mmu_info *info)
 	info->img_lo = img_lo;
 	info->img_hi = img_hi;
 	info->ttbr = pool;
+	/* ID_AA64MMFR0_EL1.TGran16 [23:20]: 0 = 16K granule not implemented */
+	if (((rsr("id_aa64mmfr0_el1") >> 20) & 0xf) == 0)
+		return -2;	// Exit with error -2: 16K granule not implemented
 	if (((img_hi - 1) >> BLK_SHIFT) - (img_lo >> BLK_SHIFT) > 1)
 		return -1;	/* only room for two L3 tables */
 
