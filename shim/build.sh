@@ -31,6 +31,12 @@ if [ -n "${1:-}" ]; then
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
+# Stockがgzip圧縮だったから
+if [ "${KERNEL_GZ:-1}" = 1 ]; then
+	gzip -9 -c out/Image | cat - "$DTB" > out/Image-dtb
+else
+	cat out/Image "$DTB" > out/Image-dtb
+fi
 # mkbootimg 変更点:
 # 	ヘッダバージョンを2から0に変更
 # 	
