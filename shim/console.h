@@ -6,13 +6,24 @@
 #define FB_H		1920
 #define FB_STRIDE	(FB_W * 4)	    /* 色変になったらここ変える */    /* a8r8g8b8, matches mainline simplefb */
 
-#define RED	0xffff0000U
+#define RED	    0xffff0000U
 #define BLUE	0xff0000a0U
 #define WHITE	0xffffffffU
 #define YELLOW	0xffffff00U
 #define GREEN	0xff00ff00U
 
 extern volatile uint32_t *con_fb;
+
+// フレームバッファ情報を自動で取得したい！
+extern int con_w, con_h, con_stride, con_bpp;
+extern uint32_t con_pat;
+struct con_pipe {
+	uint32_t addr, size, imgsize, stride, fmt, pat;
+};
+extern struct con_pipe con_pipes[8];
+extern int con_pipe_sel;	/* -1: none found, defaults in use */ 
+/* Read ABL's MDP pipe setup (fb address/stride/size/format). Call before con_clear(). */
+int con_autodetect(void);
 
 void con_clear(uint32_t bg);
 void con_skip(void);

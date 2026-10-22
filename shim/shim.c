@@ -415,6 +415,7 @@ void shim_main(uint64_t dtb)
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
+	con_autodetect();	// for debugging
 	con_clear(RED);
 	con_str("SHIM", "poplar milestone 4: xnu loader");
 	con_skip();
