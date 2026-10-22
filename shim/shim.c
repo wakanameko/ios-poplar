@@ -418,6 +418,13 @@ void shim_main(uint64_t dtb)
 	con_autodetect();	// for debugging
 	con_clear(RED);
 	con_str("SHIM", "poplar milestone 4: xnu loader");
+	con_hex2("FB", "base=", (uint32_t)(uintptr_t)con_fb, "str=", con_stride);
+	con_hex2("FB", "w=", con_w, "h=", con_h);
+	con_hex2("FB", "bpp=", con_bpp, "pat=", con_pat);
+	if (con_pipe_sel >= 0)
+		con_hex2("PIPE", "sel=", con_pipe_sel, "fmt=", con_pipes[con_pipe_sel].fmt);
+	else
+		con_str("PIPE", "none found: defaults");
 	con_skip();
 	con_hex2("CPU", "mmfr0=", rsr("id_aa64mmfr0_el1"), "tg16=", (rsr("id_aa64mmfr0_el1") >> 20) & 0xf);		// added to testing 16K granule
 	con_skip();																								// added to testing 16K granule
