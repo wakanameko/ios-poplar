@@ -427,7 +427,7 @@ void shim_main(uint64_t dtb)
 		con_str("PIPE", "none found: defaults");
 	con_skip();
 	con_hex2("CPU", "mmfr0=", rsr("id_aa64mmfr0_el1"), "tg16=", (rsr("id_aa64mmfr0_el1") >> 20) & 0xf);		// added to testing 16K granule
-	con_skip();																								// added to testing 16K granule
+	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
 	con_skip();

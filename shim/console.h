@@ -4,7 +4,9 @@
 #define FB_BASE		0x9d400000UL    /* sweet: 0x9c000000UL */	/* reserved-memory cont_splash_region */
 #define FB_W		1080
 #define FB_H		1920
-#define FB_STRIDE	(FB_W * 4)	    /* 色変になったらここ変える */    /* a8r8g8b8, matches mainline simplefb */
+#define FB_BPP		3		        /* measured from MDP pipe regs: BGR888 */
+#define FB_STRIDE	(FB_W * FB_BPP)	/* sweet: (FB_W * 3) */    /* a8r8g8b8, matches mainline simplefb */
+#define FB_PAT		0x00020001U	    /* memory bytes: B, G, R */ /* 測定したけどこれ使うのかな */ 
 
 #define RED	    0xffff0000U
 #define BLUE	0xff0000a0U
