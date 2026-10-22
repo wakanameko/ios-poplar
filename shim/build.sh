@@ -4,8 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 # ヘッダバージョンが古いからDTBをKernelに連結させる
 DTB=${DTB:-../dtb/boot_unpacked/dtb}
-CC=aarch64-linux-gnu-gcc
-OBJCOPY=aarch64-linux-gnu-objcopy
+CROSS=${CROSS:-aarch64-linux-gnu-}
+MKBOOTIMG=${MKBOOTIMG:-mkbootimg}
+CC=${CROSS}gcc
+OBJCOPY=${CROSS}objcopy
 CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c; do

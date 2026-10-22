@@ -28,8 +28,8 @@ volatile uint32_t *con_fb = (volatile uint32_t *)FB_BASE;
 static uint32_t con_bg;
 static int row;
 // フレームバッファ検出コードで使う変数
-int con_w = FB_W, con_h = FB_H, con_stride = FB_STRIDE, con_bpp = 4;
-uint32_t con_pat = 0x03020001;		// B,G,R,A in memory = 0xAARRGGBB little-endian
+int con_w = FB_W, con_h = FB_H, con_stride = FB_STRIDE, con_bpp = FB_BPP;
+uint32_t con_pat = FB_PAT;		// B,G,R,A in memory = 0xAARRGGBB little-endian
 struct con_pipe con_pipes[8];
 int con_pipe_sel = -1;
 
@@ -99,10 +99,11 @@ static inline void put_px(int x, int y, uint32_t raw)
 
 void con_clear(uint32_t bg)
 {
-	for (int y = 0; y < FB_H; y++) {
-		volatile uint32_t *line = con_fb + y * (FB_STRIDE / 4);
-		for (int x = 0; x < FB_W; x++)
-			line[x] = bg;
+	uint32_t raw = conv(bg);
+
+	for (int y = 0; y < con_h; y++) {
+		for (int x = 0; x < con_w; x++)
+			put_px(x, y, raw);
 	}
 	con_bg = bg;
 	row = 0;
