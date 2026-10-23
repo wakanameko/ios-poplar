@@ -97,7 +97,7 @@ static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3)
  * it points at this block, so entry point and boot_args need no absolute pointers in the image.
  * The core starts with the MMU and caches off. Likes the direct branch below.
  */
-static volatile struct { uint64_t entry, boot_args; } handoff __attribute__((aligned(64)));
+static volatile struct { uint64_t entry, boot_args, fb; } handoff __attribute__((aligned(64)));
  
 __asm__(
 "	.pushsection .text, \"ax\"\n"
@@ -108,6 +108,13 @@ __asm__(
 "	ic	iallu\n"
 "	dsb	sy\n"
 "	isb\n"
+"	ldr	x2, [x0, #16]\n"		// breadcrumb: paint a white band (~60 rows) at the bottom of the screen
+"	mov	x3, #-1\n"			// so we can see the big core got here before xnu clears the screen
+"	mov	x4, #0x6000\n"
+"1:	str	x3, [x2], #8\n"
+"	subs	x4, x4, #1\n"
+"	b.ne	1b\n"
+"	dsb	sy\n"
 "	ldr	x1, [x0]\n"
 "	ldr	x0, [x0, #8]\n"
 "	br	x1\n"
@@ -166,7 +173,7 @@ const char *loader_boot(uintptr_t dtb)
 	ba->Video.v_rowBytes = FB_STRIDE;
 	ba->Video.v_width = FB_W;
 	ba->Video.v_height = FB_H;
-	ba->Video.v_depth = con_bpp * 8;
+	ba->Video.v_depth = 32;
 	ba->deviceTreeP = adt_pa - pa_of_va_base;	/* xnu reads it with the MMU on: a VA */
 	ba->deviceTreeLength = (uint32_t)p->adt_size;
 	for (int i = 0; i < BOOT_LINE_LENGTH; i++)
@@ -191,6 +198,7 @@ const char *loader_boot(uintptr_t dtb)
  
 	handoff.entry = entry_pa;
 	handoff.boot_args = ba_pa;
+	handoff.fb = (uintptr_t)con_fb + (uint64_t)con_stride * (con_h - 60);	// clean up the bottom of the screen to check log
 	__asm__ volatile("dsb sy" ::: "memory");
 	int64_t r = (int64_t)smc(PSCI_CPU_ON, XNU_BOOT_MPIDR, (uintptr_t)xnu_big_entry,
 				 (uintptr_t)&handoff);

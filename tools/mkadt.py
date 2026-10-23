@@ -15,8 +15,8 @@ MEM_SIZE = 0x4f000000		# sweet: 0x4d000000
 # --highmem (phone only): the whole upper DDR bank. The live FDT memory node is
 # <0x80000000 2G>, <0x1_00000000 0x7c000000>; every fixed reserved-memory
 # carve-out is in the low bank and the dynamic pools are limited below 4G.
-HIGH_PHYS_BASE = 0x100000000
-HIGH_MEM_SIZE = 0x7c000000
+HIGH_PHYS_BASE = 0x102000000    # 32MB aligned (mkpayload.py / xnu start.s block mapping); sweet: 0x100000000
+HIGH_MEM_SIZE = 0x7a000000      # ends at 0x17c000000, 64MB margin; sweet: 0xfcc00000
 # /arm-io children are relative to this; it must not be 0 (serial_init bails)
 SOC_BASE = 0x01000000
 
@@ -215,9 +215,10 @@ def build(seed=None, qemu=False, highmem=False):
     # Identity of the iPhone X whose userland runs here: compatible[0] is
     # hw.model/hw.target (D22AP), model is hw.machine/hw.product
     # (iPhone10,3). 'sony,poplar' stays for SweetPlatformExpert matching.
+    # カーネルパッチ側を修正してないので、xiaomi,sweetは残しておく
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('sony,poplar') + cstr('qcom,msm8998') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + cstr('qcom,sm7150') + cstr('sony,poplar') + cstr('qcom,msm8998') + cstr('AppleARM')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
