@@ -115,6 +115,16 @@ __asm__(
 "	subs	x4, x4, #1\n"
 "	b.ne	1b\n"
 "	dsb	sy\n"
+//  below code for debugging
+"	mrs	x5, cntpct_el0\n"		// hold the band on screen for ~2 s (19.2 MHz) before xnu clears it
+"	mov	x6, #0xf800\n"
+"	movk	x6, #0x124, lsl #16\n"
+"	lsl	x6, x6, #1\n"
+"	add	x6, x6, x5\n"
+"2:	mrs	x5, cntpct_el0\n"
+"	cmp	x5, x6\n"
+"	b.lo	2b\n"
+//
 "	ldr	x1, [x0]\n"
 "	ldr	x0, [x0, #8]\n"
 "	br	x1\n"
