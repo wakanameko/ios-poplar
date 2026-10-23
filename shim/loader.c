@@ -8,9 +8,11 @@
  * and caches off, x0 = boot_args (physical).
  */
 #include <stdint.h>
+#include <stddef.h>
 #include "console.h"
 #include "fdt.h"
 #include "loader.h"
+extern size_t tinfl_decompress_mem_to_mem(void *pDest_buf, size_t dest_buf_size, const void *pSrc_buf, size_t src_buf_size, unsigned int flags);
 
 #define BOOT_LINE_LENGTH	608
 #define PAGE_16K		0x4000UL
@@ -140,10 +142,59 @@ const char *loader_boot(uintptr_t dtb)
 		return "no initrd in /chosen";
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
  
-	const struct payload *p = (const struct payload *)rd_start;
+	// const struct payload *p = (const struct payload *)rd_start;
+	const uint8_t *src_ptr = (const uint8_t *)rd_start;
+	uint64_t src_size = rd_end - rd_start;
+
+	// safe memory region 
+	uintptr_t expand_dst = 0x17c000000UL; 
+
+	// check GZIP header
+	if (src_size > 18 && src_ptr[0] == 0x1f && src_ptr[1] == 0x8b) {
+		con_str("GZIP", "detected compressed payload, decompressing...");
+		
+		uint32_t uncompressed_size = *(const uint32_t *)(rd_start + src_size - 4);
+		
+		// ヘッダスキップ位置の特定（ID1, ID2, CM, FLG, MTIME, XFL, OS）
+		size_t header_len = 10;
+		uint8_t flg = src_ptr[3];
+		if (flg & 0x04) { // FEXTRA
+			uint16_t xlen = *(const uint16_t *)(src_ptr + header_len);
+			header_len += 2 + xlen;
+		}
+		if (flg & 0x08) { // FNAME
+			while (header_len < src_size && src_ptr[header_len] != 0) header_len++;
+			header_len++;
+		}
+		if (flg & 0x10) { // FCOMMENT
+			while (header_len < src_size && src_ptr[header_len] != 0) header_len++;
+			header_len++;
+		}
+
+		// pointer and size of deflated payload
+		const uint8_t *deflate_data = src_ptr + header_len;
+		uint64_t deflate_size = src_size - header_len - 8; // フッターのCRC32(4)とISIZE(4)を除く
+
+		size_t decompressed_len = tinfl_decompress_mem_to_mem(
+			(void *)expand_dst, 
+			(size_t)uncompressed_size, 
+			deflate_data, 
+			(size_t)deflate_size, 
+			0
+		);
+
+		if (decompressed_len == (size_t)-1 || decompressed_len == 0) {
+			return "gzip decompression failed";
+		}
+		
+		// 展開後のペイロード構造体を expand_dst の先頭に向ける
+		src_ptr = (const uint8_t *)expand_dst;
+	}
+
+	const struct payload *p = (const struct payload *)src_ptr;
 	if (!magic_ok(p->magic))
-		return "no SWEETXNU payload";
-	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
+		return "no POPLARXNU payload";
+	if (p->version != 1 || (p->adt_off & 7))
 		return "bad payload header";
  
 	uint64_t pa_of_va_base = p->phys_base - p->virt_base;	/* pa = va + this */
@@ -158,7 +209,7 @@ const char *loader_boot(uintptr_t dtb)
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		uintptr_t dst = s->vmaddr + pa_of_va_base;
-		copy64(dst, rd_start + s->file_off, s->file_size);
+		copy64(dst, (uintptr_t)src_ptr + s->file_off, s->file_size);
 		if (s->vmsize > s->file_size)
 			zero64(dst + ((s->file_size + 7) & ~7UL), s->vmsize - ((s->file_size + 7) & ~7UL));
 	}
@@ -166,7 +217,7 @@ const char *loader_boot(uintptr_t dtb)
  
 	/* ADT, then boot_args, behind the kernel; everything below topOfKernelData is ours. */
 	uintptr_t adt_pa = p->kernel_end + pa_of_va_base;
-	copy64(adt_pa, rd_start + p->adt_off, p->adt_size);
+	copy64(adt_pa, (uintptr_t)src_ptr + p->adt_off, p->adt_size);
 	uintptr_t ba_pa = (adt_pa + p->adt_size + PAGE_16K - 1) & ~(PAGE_16K - 1);
 	uintptr_t top = ba_pa + PAGE_16K;
  
@@ -221,3 +272,6 @@ const char *loader_boot(uintptr_t dtb)
 	for (;;)
 		__asm__ volatile("msr daifset, #0xf; wfe");
 }
+
+size_t inflate(const void *src, size_t src_size, void *dst, size_t dst_size)
+{
