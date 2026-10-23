@@ -26,10 +26,19 @@ truncate -s "$size" out/Image
 # Find DTB offs (16)
 hdr=$(od -An -t u8 -j 16 -N 8 out/Image | tr -d " ")
 [ "$hdr" = "$size" ] || echo "warning: Image header image_size ($hdr) != file size ($size): appended DTB may not be found" >&2
-# Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else an empty
-# newc cpio (ABL dislikes a zero-size ramdisk on some builds) -> diagnostics.
+# Ramdisk: compress with gzip to reduce size under 36MiB
 if [ -n "${1:-}" ]; then
-	cp "$1" out/ramdisk.bin
+    echo "Compressing payload ($1) with gzip..."
+    gzip -9 -c "$1" > out/ramdisk.bin
+    
+    # サイズチェック（36MiB = 37748736 バイト以下か確認）
+    rd_size=$(stat -c%s "out/ramdisk.bin" 2>/dev/null || stat -f%z "out/ramdisk.bin")
+    echo "Compressed ramdisk size: $(( rd_size / 1024 / 1024 )) MiB"
+    
+    if [ "$rd_size" -gt 37748736 ]; then
+        echo "error: Compressed ramdisk still exceeds 36MiB limit!" >&2
+        exit 1
+    fi
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
@@ -47,6 +56,7 @@ mkbootimg --header_version 0 --kernel out/Image-dtb --ramdisk out/ramdisk.bin \
 	--tags_offset 0x100 --pagesize 4096 \
 	--os_version 9.0.0 --os_patch_level 2019-02 \
 	--cmdline "console=null" -o out/shim-boot.img
+
 # Host render of the console layout.
 gcc -O1 -Wall -o out/host_test console.c host_test.c && ./out/host_test
-ls -l out/Image out/Image-dtb out/shim-boot.img
+ls -l out/Image out/Image-dtb out/shim-boot.img out/ramdisk.bin
