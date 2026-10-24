@@ -2,13 +2,15 @@ diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
 index 40c94e8..7f57c3b 100644
 --- a/makedefs/MakeInc.def
 +++ b/makedefs/MakeInc.def
-@@ -61,7 +61,8 @@
+@@ -61,7 +61,10 @@
  MACHINE_FLAGS_ARM64_T6000 = -DARM64_BOARD_CONFIG_T6000 		-mcpu=apple-a14
  MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
  MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
 -MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
-+# poplar (Xperia XZ1, MSM8998): Kryo 280 is ARMv8.0 -- no LSE atomics, PAN or UAO
-+MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8-a+crypto
++# poplar (Xperia XZ1, MSM8998): Kryo 280 is ARMv8.0 -- no LSE atomics, PAN or UAO.
++# -march alone is not enough: the arm64-apple target defaults to -mcpu=apple-m1, whose
++# CPU features (LSE included) stay on. Name an ARMv8.0 core instead (Kryo 280 Gold ~ A73).
++MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -mcpu=cortex-a73+crypto
  
  
  #
@@ -25,3 +27,4 @@ index b99c2f4..7bef3ee 100644
  #define __ARM_16K_PG__            1
  
  #define HAS_GIC_V3                1
+ 
