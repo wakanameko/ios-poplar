@@ -119,7 +119,16 @@ static uint64_t smc(uint64_t fn, uint64_t a1, uint64_t a2, uint64_t a3)
  * it points at this block, so entry point and boot_args need no absolute pointers in the image.
  * The core starts with the MMU and caches off. Likes the direct branch below.
  */
-static volatile struct { uint64_t entry, boot_args, fb; } handoff __attribute__((aligned(64)));
+static volatile struct {
+	uint64_t entry, boot_args, fb;	/* 0x00 0x08 0x10: set by the little core */
+	uint64_t cpacr;			/* 0x18: boot core's CPACR_EL1 (FP/SIMD enabled), copied to the big core */
+	uint64_t exc;			/* 0x20: 1 once the big core took an exception before xnu set VBAR */
+	uint64_t esr, elr, far, spsr;	/* 0x28 0x30 0x38 0x40 */
+	uint64_t slot;			/* 0x48: vector slot 0..15 */
+	uint64_t cpacr0, sctlr0, cntfrq0;	/* 0x50 0x58 0x60: big core's own values at power-on */
+	uint64_t arrived;		/* 0x68: 1 once the big core runs the trampoline */
+} handoff __attribute__((aligned(64), used));
+_Static_assert(__builtin_offsetof(__typeof__(handoff), arrived) == 0x68, "handoff layout (asm uses offsets)");
  
 __asm__(
 "	.pushsection .text, \"ax\"\n"
@@ -130,6 +139,20 @@ __asm__(
 "	ic	iallu\n"
 "	dsb	sy\n"
 "	isb\n"
+"	mrs	x9, cpacr_el1\n"		// report the freshly powered core's state
+"	str	x9, [x0, #0x50]\n"
+"	mrs	x9, sctlr_el1\n"
+"	str	x9, [x0, #0x58]\n"
+"	mrs	x9, cntfrq_el0\n"
+"	str	x9, [x0, #0x60]\n"
+"	ldr	x9, [x0, #0x18]\n"		// FP/SIMD as on the boot core: a core started by CPU_ON
+"	msr	cpacr_el1, x9\n"		// comes up with FP trapped, and xnu's C code uses SIMD
+"	adr	x9, big_vectors\n"		// catch anything xnu hits before it installs its own VBAR
+"	msr	vbar_el1, x9\n"
+"	isb\n"
+"	mov	x9, #1\n"
+"	str	x9, [x0, #0x68]\n"
+"	dsb	sy\n"
 "	ldr	x2, [x0, #16]\n"		// breadcrumb: paint a white band (~60 rows) at the bottom of the screen
 "	mov	x3, #-1\n"			// so we can see the big core got here before xnu clears the screen
 "	mov	x4, #0x6000\n"
@@ -150,6 +173,30 @@ __asm__(
 "	ldr	x1, [x0]\n"
 "	ldr	x0, [x0, #8]\n"
 "	br	x1\n"
+/* 16 vector slots; each records the exception for the little core and parks the big core */
+"	.balign	0x800\n"
+"big_vectors:\n"
+"	.irp	n, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15\n"
+"	.balign	0x80\n"
+"	mov	x9, #\\n\n"
+"	b	big_exc\n"
+"	.endr\n"
+"big_exc:\n"
+"	adr	x10, handoff\n"
+"	mrs	x11, esr_el1\n"
+"	str	x11, [x10, #0x28]\n"
+"	mrs	x11, elr_el1\n"
+"	str	x11, [x10, #0x30]\n"
+"	mrs	x11, far_el1\n"
+"	str	x11, [x10, #0x38]\n"
+"	mrs	x11, spsr_el1\n"
+"	str	x11, [x10, #0x40]\n"
+"	str	x9, [x10, #0x48]\n"
+"	mov	x11, #1\n"
+"	str	x11, [x10, #0x20]\n"
+"	dsb	sy\n"
+"3:	wfe\n"
+"	b	3b\n"
 "	.popsection\n");
 extern char xnu_big_entry[];
 
@@ -272,6 +319,11 @@ const char *loader_boot(uintptr_t dtb)
 	handoff.entry = entry_pa;
 	handoff.boot_args = ba_pa;
 	handoff.fb = (uintptr_t)con_fb + (uint64_t)con_stride * (con_h - 60);
+	uint64_t cpacr;
+	__asm__ volatile("mrs %0, cpacr_el1" : "=r"(cpacr));
+	handoff.cpacr = cpacr | (3UL << 20);	/* FPEN = 0b11: no FP/SIMD trap at EL1/EL0 */
+	handoff.exc = 0;
+	handoff.arrived = 0;
 	__asm__ volatile("dsb sy" ::: "memory");
 	int64_t r = (int64_t)smc(PSCI_CPU_ON, XNU_BOOT_MPIDR, (uintptr_t)xnu_big_entry,
 				 (uintptr_t)&handoff);
@@ -280,7 +332,40 @@ const char *loader_boot(uintptr_t dtb)
 		return "cannot start big cpu";
 	}
 	con_str("XNU", "started on big cpu");
-	/* This (little) core is done; keep it quiet while xnu runs on the big cores. */
+
+	/*
+	 * The little core stays as a monitor: it reports the big core's power-on state and any
+	 * exception the big core takes before xnu installs its own vectors (until then the big
+	 * core runs on big_vectors, which record ESR/ELR/FAR and park it).
+	 */
+	uint64_t f, t0, t;
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
+	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t0));
+	do
+		__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t));
+	while (!handoff.arrived && t - t0 < f);
+	if (!handoff.arrived) {
+		con_str("BIGCPU", "never reached the trampoline");
+	} else {
+		con_hex2("BIGCPU", "cpacr=", handoff.cpacr0, "sctlr=", handoff.sctlr0);
+		con_hex2("BIGCPU", "cntfrq=", handoff.cntfrq0, "now=", handoff.cpacr);
+	}
+	int quiet_reported = 0;
+	for (;;) {
+		__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t));
+		if (handoff.exc) {
+			con_hex2("BIGEXC", "slot=", handoff.slot, "sec=", (t - t0) / f);
+			con_hex("ESR", handoff.esr);
+			con_hex("ELR", handoff.elr);
+			con_hex("FAR", handoff.far);
+			con_hex("SPSR", handoff.spsr);
+			break;
+		}
+		if (!quiet_reported && t - t0 > 30 * f) {
+			con_str("BIGEXC", "none in 30s (xnu owns VBAR or hangs)");
+			quiet_reported = 1;
+		}
+	}
 	for (;;)
-		__asm__ volatile("msr daifset, #0xf; wfe");
+	__asm__ volatile("msr daifset, #0xf; wfe");
 }
