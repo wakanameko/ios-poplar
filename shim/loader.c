@@ -23,7 +23,7 @@
 #define GZ_SCRATCH_OFF		0x8000000UL	/* phys_base + 128MB */
 
 struct gzhdr {
-	char magic[9];			/* "SWEETGZ1" */
+	char magic[9];			/* "POPLARGZ1" */
 	uint64_t phys_base, mem_size;	/* copied from the payload header, needed before inflating */
 	uint64_t raw_size, comp_size;
 };
@@ -90,7 +90,7 @@ static int gz_magic_ok(const char *m)
 
 static int magic_ok(const char *m)
 {
-	static const char want[] = "SWEETXNU";
+	static const char want[] = "POPLARXNU";
 	for (int i = 0; i < 9; i++)
 		if (m[i] != want[i])
 			return 0;
@@ -152,29 +152,6 @@ __asm__(
 "	.popsection\n");
 extern char xnu_big_entry[];
 
-// The range [lo, hi) the payload and xnu will use; report memory nodes and overlapping reservations.
-struct memctx {
-	uint64_t lo, hi;
-};
-
-static void mem_cb(int kind, const char *name, uint64_t base, uint64_t size, void *ctx)
-{
-	const struct memctx *c = ctx;
-	char label[9];
-	int i = 0;
-
-	if (kind == 1) {
-		con_hex2("MEM", "b4k=", base >> 12, "s4k=", size >> 12);
-		return;
-	}
-	if (base + size <= c->lo || base >= c->hi)
-		return;
-	for (; i < 8 && name[i] && name[i] != '@'; i++)
-		label[i] = name[i];
-	label[i] = 0;
-	con_hex2(label, "b4k=", base >> 12, "s4k=", size >> 12);
-}
-
 const char *loader_boot(uintptr_t dtb)
 {
 	uint64_t rd_start, rd_end;
@@ -219,15 +196,14 @@ const char *loader_boot(uintptr_t dtb)
 	con_hex("VIRT", p->virt_base);
 	con_hex("ENTRY", p->entry_va);
  
-	/* Everything the loader will write or xnu will own, and what the live DTB says about it. */
-	struct memctx mc = { p->phys_base, p->phys_base + p->mem_size };
+	/* Everything the loader will write or xnu will own (some segments sit below phys_base). */
+	uint64_t lo = p->phys_base, hi = p->phys_base + p->mem_size;
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		uint64_t d = p->segs[i].vmaddr + pa_of_va_base;
-		if (d < mc.lo)
-			mc.lo = d;
+		if (d < lo)
+			lo = d;
 	}
-	con_hex2("RANGE", "lo4k=", mc.lo >> 12, "hi4k=", mc.hi >> 12);
-	fdt_walk_memory(dtb, mem_cb, &mc);
+	con_hex2("RANGE", "lo4k=", lo >> 12, "hi4k=", hi >> 12);
 
 	// The payload must not overlap where the kernel goes.
 	if (packed) {

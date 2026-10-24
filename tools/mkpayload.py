@@ -9,7 +9,7 @@ kernelcaches itself, so the chains are walked here and every pointer is
 rewritten to its unslid target. The shim then only copies flat segments.
 
 Payload layout (little endian, all offsets from payload start):
-  0x000  char  magic[8] = "SWEETXNU"
+  0x000  char  magic[9] = "POPLARXNU"
   0x008  u32   version = 1, nsegs
   0x010  u64   virt_base      kernel VA that maps to phys_base
   0x018  u64   entry_va       LC_UNIXTHREAD pc
@@ -142,12 +142,12 @@ def adt_dram(adt_blob):
 
 # gz container, unpacked by loader.c:
 #   0x00 char magic[9] = "POPLARGZ1"
-#   0x08 u64  phys_base, mem_size   (copied from the payload header)
-#   0x18 u64  raw_size              size of the payload once inflated
-#   0x20 u64  comp_size             length of the raw DEFLATE stream
-#   0x28 raw DEFLATE stream (RFC 1951, no zlib/gzip header)
+#   0x10 u64  phys_base, mem_size   (copied from the payload header)
+#   0x20 u64  raw_size              size of the payload once inflated
+#   0x28 u64  comp_size             length of the raw DEFLATE stream
+#   0x30 raw DEFLATE stream (RFC 1951, no zlib/gzip header)
 # ABL puts the ramdisk at 0x83400000 and the carve-out at 0x85800000 caps it at 36MiB.
-GZ_HDR_SIZE = 0x28
+GZ_HDR_SIZE = 0x30
 ABL_RAMDISK_MAX = 0x85800000 - 0x83400000
 
 
@@ -155,7 +155,7 @@ def pack_gz(blob):
     phys_base, mem_size = struct.unpack_from('<2Q', blob, 0x38)
     c = zlib.compressobj(9, zlib.DEFLATED, -15)
     comp = c.compress(blob) + c.flush()
-    out = struct.pack('<8s4Q', b'POPLARGZ1', phys_base, mem_size, len(blob), len(comp)) + comp
+    out = struct.pack('<9s4Q', b'POPLARGZ1', phys_base, mem_size, len(blob), len(comp)) + comp
     out += b'\0' * (-len(out) & 0xf)
     return out
 
@@ -200,7 +200,7 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     out += adt_blob
     out += b'\0' * (-len(out) & 0xf)
 
-    struct.pack_into('<8sII', out, 0, b'SWEETXNU', 1, len(pieces))
+    struct.pack_into('<9sII', out, 0, b'POPLARXNU', 1, len(pieces))
     struct.pack_into('<7Q', out, 0x10, virt_base, m['entry'], adt_off, len(adt_blob), kernel_end,
                      PHYS_BASE, MEM_SIZE)
     cl = cmdline.encode()[:BOOT_LINE_LENGTH - 1]
