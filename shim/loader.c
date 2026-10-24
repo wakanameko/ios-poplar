@@ -20,10 +20,11 @@
 
 // gzip
 #define GZ_HDR_SIZE		0x30
+#define MAGIC_LEN		16	/* "POPLARXNU" / "POPLARGZ1", NUL padded (mkpayload.py <16s) */
 #define GZ_SCRATCH_OFF		0x8000000UL	/* phys_base + 128MB */
 
 struct gzhdr {
-	char magic[9];			/* "POPLARGZ1" */
+	char magic[MAGIC_LEN];		/* "POPLARGZ1" */
 	uint64_t phys_base, mem_size;	/* copied from the payload header, needed before inflating */
 	uint64_t raw_size, comp_size;
 };
@@ -33,7 +34,7 @@ struct payload_seg {
 };
 
 struct payload {
-	char magic[9];
+	char magic[MAGIC_LEN];
 	uint32_t version, nsegs;
 	uint64_t virt_base, entry_va, adt_off, adt_size, kernel_end;
 	uint64_t phys_base, mem_size;
@@ -82,7 +83,7 @@ static void zero64(uintptr_t dst, uint64_t n)
 static int gz_magic_ok(const char *m)
 {
 	static const char want[] = "POPLARGZ1";
-	for (int i = 0; i < 9; i++)
+	for (int i = 0; i < (int)sizeof(want); i++)	/* includes the NUL */
 		if (m[i] != want[i])
 			return 0;
 	return 1;
@@ -91,7 +92,7 @@ static int gz_magic_ok(const char *m)
 static int magic_ok(const char *m)
 {
 	static const char want[] = "POPLARXNU";
-	for (int i = 0; i < 9; i++)
+	for (int i = 0; i < (int)sizeof(want); i++)	/* includes the NUL */
 		if (m[i] != want[i])
 			return 0;
 	return 1;

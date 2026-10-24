@@ -9,16 +9,16 @@ kernelcaches itself, so the chains are walked here and every pointer is
 rewritten to its unslid target. The shim then only copies flat segments.
 
 Payload layout (little endian, all offsets from payload start):
-  0x000  char  magic[9] = "POPLARXNU"
-  0x008  u32   version = 1, nsegs
-  0x010  u64   virt_base      kernel VA that maps to phys_base
-  0x018  u64   entry_va       LC_UNIXTHREAD pc
-  0x020  u64   adt_off, adt_size
-  0x030  u64   kernel_end_va  end of the highest segment (page aligned)
-  0x038  u64   phys_base      kernel-managed RAM (same values as the ADT's dram-base/size)
-  0x040  u64   mem_size
-  0x048  char  cmdline[608]
-  0x2a8  seg[nsegs] { u64 vmaddr, vmsize, file_off(in payload), file_size }
+  0x000  char  magic[16] = "POPLARXNU" (NUL padded)
+  0x010  u32   version = 1, nsegs
+  0x018  u64   virt_base      kernel VA that maps to phys_base
+  0x020  u64   entry_va       LC_UNIXTHREAD pc
+  0x028  u64   adt_off, adt_size
+  0x038  u64   kernel_end_va  end of the highest segment (page aligned)
+  0x040  u64   phys_base      kernel-managed RAM (same values as the ADT's dram-base/size)
+  0x048  u64   mem_size
+  0x050  char  cmdline[608]
+  0x2b0  seg[nsegs] { u64 vmaddr, vmsize, file_off(in payload), file_size }
 
 --ramdisk appends IMAGE as one more segment right after the kernel and moves
 kernel_end past it, so the shim needs no changes: the image lands below the
@@ -34,8 +34,8 @@ import adt  # noqa: E402
 LC_SEGMENT_64, LC_UNIXTHREAD, LC_DYLD_CHAINED_FIXUPS = 0x19, 0x5, 0x80000034
 PAGE = 0x4000
 BOOT_LINE_LENGTH = 608
-CMDLINE = 0x48
-SEG_TABLE = CMDLINE + BOOT_LINE_LENGTH	# 0x2a8
+CMDLINE = 0x50
+SEG_TABLE = CMDLINE + BOOT_LINE_LENGTH	# 0x2b0
 
 
 def parse_macho(buf):
@@ -141,7 +141,7 @@ def adt_dram(adt_blob):
 
 
 # gz container, unpacked by loader.c:
-#   0x00 char magic[9] = "POPLARGZ1"
+#   0x00 char magic[16] = "POPLARGZ1" (NUL padded)
 #   0x10 u64  phys_base, mem_size   (copied from the payload header)
 #   0x20 u64  raw_size              size of the payload once inflated
 #   0x28 u64  comp_size             length of the raw DEFLATE stream
@@ -152,10 +152,10 @@ ABL_RAMDISK_MAX = 0x85800000 - 0x83400000
 
 
 def pack_gz(blob):
-    phys_base, mem_size = struct.unpack_from('<2Q', blob, 0x38)
+    phys_base, mem_size = struct.unpack_from('<2Q', blob, 0x18 + 0x28)	# 0x40
     c = zlib.compressobj(9, zlib.DEFLATED, -15)
     comp = c.compress(blob) + c.flush()
-    out = struct.pack('<9s4Q', b'POPLARGZ1', phys_base, mem_size, len(blob), len(comp)) + comp
+    out = struct.pack('<16s4Q', b'POPLARGZ1', phys_base, mem_size, len(blob), len(comp)) + comp
     out += b'\0' * (-len(out) & 0xf)
     return out
 
@@ -200,8 +200,8 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     out += adt_blob
     out += b'\0' * (-len(out) & 0xf)
 
-    struct.pack_into('<9sII', out, 0, b'POPLARXNU', 1, len(pieces))
-    struct.pack_into('<7Q', out, 0x10, virt_base, m['entry'], adt_off, len(adt_blob), kernel_end,
+    struct.pack_into('<16sII', out, 0, b'POPLARXNU', 1, len(pieces))
+    struct.pack_into('<7Q', out, 0x18, virt_base, m['entry'], adt_off, len(adt_blob), kernel_end,
                      PHYS_BASE, MEM_SIZE)
     cl = cmdline.encode()[:BOOT_LINE_LENGTH - 1]
     out[CMDLINE:CMDLINE + len(cl)] = cl
