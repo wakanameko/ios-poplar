@@ -26,7 +26,7 @@ ADT and boot_args, inside topOfKernelData (never handed to the VM), and the
 ADT gets /chosen/memory-map "RAMDisk" = <phys, size> for IOFindBSDRoot to
 turn into md0 (boot with rd=md0).
 """
-import argparse, os, struct, sys
+import argparse, os, struct, sys, zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
@@ -140,6 +140,26 @@ def adt_dram(adt_blob):
             struct.unpack('<Q', chosen.prop('dram-size'))[0])
 
 
+# gz container, unpacked by loader.c:
+#   0x00 char magic[9] = "POPLARGZ1"
+#   0x08 u64  phys_base, mem_size   (copied from the payload header)
+#   0x18 u64  raw_size              size of the payload once inflated
+#   0x20 u64  comp_size             length of the raw DEFLATE stream
+#   0x28 raw DEFLATE stream (RFC 1951, no zlib/gzip header)
+# ABL puts the ramdisk at 0x83400000 and the carve-out at 0x85800000 caps it at 36MiB.
+GZ_HDR_SIZE = 0x28
+ABL_RAMDISK_MAX = 0x85800000 - 0x83400000
+
+
+def pack_gz(blob):
+    phys_base, mem_size = struct.unpack_from('<2Q', blob, 0x38)
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    comp = c.compress(blob) + c.flush()
+    out = struct.pack('<8s4Q', b'POPLARGZ1', phys_base, mem_size, len(blob), len(comp)) + comp
+    out += b'\0' * (-len(out) & 0xf)
+    return out
+
+
 def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     buf = bytearray(open(kernel_path, 'rb').read())
     m = parse_macho(buf)
@@ -198,8 +218,16 @@ if __name__ == '__main__':
     ap.add_argument('kernel'); ap.add_argument('adt'); ap.add_argument('out')
     ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
+    ap.add_argument('--gz', action='store_true', help='deflate the payload (ABL ramdisk is capped at 36MiB)')
     a = ap.parse_args()
     blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
+    if a.gz:
+        raw = len(blob)
+        blob = pack_gz(blob)
+        info['gz'] = f'{raw} -> {len(blob)} bytes ({100 * len(blob) // raw}%)'
+        info['size'] = len(blob)
+        if len(blob) > ABL_RAMDISK_MAX - 0x100000:
+            sys.exit(f'error: {len(blob)} bytes still exceeds the ABL ramdisk limit of {ABL_RAMDISK_MAX - 0x100000} (36MiB minus 1MiB margin)')
     open(a.out, 'wb').write(blob)
     for k, v in info.items():
         if k != 'segs':

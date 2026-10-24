@@ -8,16 +8,25 @@
  * and caches off, x0 = boot_args (physical).
  */
 #include <stdint.h>
-#include <stddef.h>
 #include "console.h"
 #include "fdt.h"
+#include "inflate.h"
 #include "loader.h"
-extern size_t tinfl_decompress_mem_to_mem(void *pDest_buf, size_t dest_buf_size, const void *pSrc_buf, size_t src_buf_size, unsigned int flags);
 
 #define BOOT_LINE_LENGTH	608
 #define PAGE_16K		0x4000UL
 #define XNU_BOOT_MPIDR		0x100UL
 #define PSCI_CPU_ON		0xc4000003UL	// big側にしか16KBページング対応のコアがなかったので、かなり修正
+
+// gzip
+#define GZ_HDR_SIZE		0x28
+#define GZ_SCRATCH_OFF		0x8000000UL	/* phys_base + 128MB */
+
+struct gzhdr {
+	char magic[8];			/* "SWEETGZ1" */
+	uint64_t phys_base, mem_size;	/* copied from the payload header, needed before inflating */
+	uint64_t raw_size, comp_size;
+};
 
 struct payload_seg {
 	uint64_t vmaddr, vmsize, file_off, file_size;
@@ -49,6 +58,7 @@ struct boot_args {
 };
 
 _Static_assert(__builtin_offsetof(struct payload, segs) == 0x2a8, "payload header layout");
+_Static_assert(sizeof(struct gzhdr) == GZ_HDR_SIZE, "gz header layout");
 _Static_assert(__builtin_offsetof(struct boot_args, Video) == 40, "boot_args layout");
 _Static_assert(__builtin_offsetof(struct boot_args, CommandLine) == 108, "boot_args layout");
 _Static_assert(sizeof(struct boot_args) == 736, "boot_args layout");
@@ -69,10 +79,19 @@ static void zero64(uintptr_t dst, uint64_t n)
 		d[i] = 0;
 }
 
+static int gz_magic_ok(const char *m)
+{
+	static const char want[] = "POPLARGZ1";
+	for (int i = 0; i < 8; i++)
+		if (m[i] != want[i])
+			return 0;
+	return 1;
+}
+
 static int magic_ok(const char *m)
 {
 	static const char want[] = "SWEETXNU";
-	for (int i = 0; i < 8; i++)
+	for (int i = 0; i < 9; i++)
 		if (m[i] != want[i])
 			return 0;
 	return 1;
@@ -133,6 +152,29 @@ __asm__(
 "	.popsection\n");
 extern char xnu_big_entry[];
 
+// The range [lo, hi) the payload and xnu will use; report memory nodes and overlapping reservations.
+struct memctx {
+	uint64_t lo, hi;
+};
+
+static void mem_cb(int kind, const char *name, uint64_t base, uint64_t size, void *ctx)
+{
+	const struct memctx *c = ctx;
+	char label[9];
+	int i = 0;
+
+	if (kind == 1) {
+		con_hex2("MEM", "b4k=", base >> 12, "s4k=", size >> 12);
+		return;
+	}
+	if (base + size <= c->lo || base >= c->hi)
+		return;
+	for (; i < 8 && name[i] && name[i] != '@'; i++)
+		label[i] = name[i];
+	label[i] = 0;
+	con_hex2(label, "b4k=", base >> 12, "s4k=", size >> 12);
+}
+
 const char *loader_boot(uintptr_t dtb)
 {
 	uint64_t rd_start, rd_end;
@@ -141,60 +183,35 @@ const char *loader_boot(uintptr_t dtb)
 	    !fdt_chosen_u64(dtb, "linux,initrd-end", &rd_end))
 		return "no initrd in /chosen";
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
- 
-	// const struct payload *p = (const struct payload *)rd_start;
-	const uint8_t *src_ptr = (const uint8_t *)rd_start;
-	uint64_t src_size = rd_end - rd_start;
 
-	// safe memory region 
-	uintptr_t expand_dst = 0x17c000000UL; 
+	int packed = 0;
+	const struct gzhdr *g = (const struct gzhdr *)rd_start;
+	if (gz_magic_ok(g->magic)) {
+		uint64_t scratch = g->phys_base + GZ_SCRATCH_OFF;
+		size_t outlen = 0;
 
-	// check GZIP header
-	if (src_size > 18 && src_ptr[0] == 0x1f && src_ptr[1] == 0x8b) {
-		con_str("GZIP", "detected compressed payload, decompressing...");
-		
-		uint32_t uncompressed_size = *(const uint32_t *)(rd_start + src_size - 4);
-		
-		// ヘッダスキップ位置の特定（ID1, ID2, CM, FLG, MTIME, XFL, OS）
-		size_t header_len = 10;
-		uint8_t flg = src_ptr[3];
-		if (flg & 0x04) { // FEXTRA
-			uint16_t xlen = *(const uint16_t *)(src_ptr + header_len);
-			header_len += 2 + xlen;
+		if (g->raw_size < sizeof(struct payload) || GZ_SCRATCH_OFF + g->raw_size > g->mem_size)
+			return "gz payload does not fit in xnu ram";
+		if (GZ_HDR_SIZE + g->comp_size > rd_end - rd_start)
+			return "gz payload truncated";
+		con_hex2("INFLATE", "comp=", g->comp_size, "raw=", g->raw_size);
+		con_hex2("INFLATE", "to4k=", scratch >> 12, 0, 0);
+		int rc = inflate_raw((const uint8_t *)(rd_start + GZ_HDR_SIZE), g->comp_size,
+				     (uint8_t *)scratch, g->raw_size, &outlen);
+		if (rc || outlen != g->raw_size) {
+			con_hex2("INFLATE", "rc=", (uint32_t)rc, "out=", (uint32_t)outlen);
+			return "inflate failed";
 		}
-		if (flg & 0x08) { // FNAME
-			while (header_len < src_size && src_ptr[header_len] != 0) header_len++;
-			header_len++;
-		}
-		if (flg & 0x10) { // FCOMMENT
-			while (header_len < src_size && src_ptr[header_len] != 0) header_len++;
-			header_len++;
-		}
-
-		// pointer and size of deflated payload
-		const uint8_t *deflate_data = src_ptr + header_len;
-		uint64_t deflate_size = src_size - header_len - 8; // フッターのCRC32(4)とISIZE(4)を除く
-
-		size_t decompressed_len = tinfl_decompress_mem_to_mem(
-			(void *)expand_dst, 
-			(size_t)uncompressed_size, 
-			deflate_data, 
-			(size_t)deflate_size, 
-			0
-		);
-
-		if (decompressed_len == (size_t)-1 || decompressed_len == 0) {
-			return "gzip decompression failed";
-		}
-		
-		// 展開後のペイロード構造体を expand_dst の先頭に向ける
-		src_ptr = (const uint8_t *)expand_dst;
+		con_str("INFLATE", "done");
+		rd_start = scratch;
+		rd_end = scratch + g->raw_size;
+		packed = 1;
 	}
 
-	const struct payload *p = (const struct payload *)src_ptr;
+	const struct payload *p = (const struct payload *)rd_start;
 	if (!magic_ok(p->magic))
 		return "no POPLARXNU payload";
-	if (p->version != 1 || (p->adt_off & 7))
+	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
 		return "bad payload header";
  
 	uint64_t pa_of_va_base = p->phys_base - p->virt_base;	/* pa = va + this */
@@ -202,14 +219,31 @@ const char *loader_boot(uintptr_t dtb)
 	con_hex("VIRT", p->virt_base);
 	con_hex("ENTRY", p->entry_va);
  
-	/* The payload must not overlap where the kernel goes. */
-	if (rd_end > p->phys_base && rd_start < p->phys_base + p->mem_size)
+	/* Everything the loader will write or xnu will own, and what the live DTB says about it. */
+	struct memctx mc = { p->phys_base, p->phys_base + p->mem_size };
+	for (uint32_t i = 0; i < p->nsegs; i++) {
+		uint64_t d = p->segs[i].vmaddr + pa_of_va_base;
+		if (d < mc.lo)
+			mc.lo = d;
+	}
+	con_hex2("RANGE", "lo4k=", mc.lo >> 12, "hi4k=", mc.hi >> 12);
+	fdt_walk_memory(dtb, mem_cb, &mc);
+
+	// The payload must not overlap where the kernel goes.
+	if (packed) {
+		// The inflated copy lives in xnu's RAM: it only has to stay clear of what we write.
+		if (rd_start < p->kernel_end + pa_of_va_base + p->adt_size + 2 * PAGE_16K)
+			return "inflated payload overlaps kernel image";
+	} else if (rd_end > p->phys_base && rd_start < p->phys_base + p->mem_size) {
 		return "ramdisk overlaps kernel memory";
+	}
  
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		uintptr_t dst = s->vmaddr + pa_of_va_base;
-		copy64(dst, (uintptr_t)src_ptr + s->file_off, s->file_size);
+		char sl[4] = { 'S', '0' + i / 10 % 10, '0' + i % 10, 0 };
+		con_hex2(sl, "pa4k=", dst >> 12, "sz4k=", s->vmsize >> 12);	/* last line shown = last thing touched */
+		copy64(dst, rd_start + s->file_off, s->file_size);
 		if (s->vmsize > s->file_size)
 			zero64(dst + ((s->file_size + 7) & ~7UL), s->vmsize - ((s->file_size + 7) & ~7UL));
 	}
@@ -217,7 +251,8 @@ const char *loader_boot(uintptr_t dtb)
  
 	/* ADT, then boot_args, behind the kernel; everything below topOfKernelData is ours. */
 	uintptr_t adt_pa = p->kernel_end + pa_of_va_base;
-	copy64(adt_pa, (uintptr_t)src_ptr + p->adt_off, p->adt_size);
+	con_hex2("ADT", "pa4k=", adt_pa >> 12, "sz4k=", p->adt_size >> 12);
+	copy64(adt_pa, rd_start + p->adt_off, p->adt_size);
 	uintptr_t ba_pa = (adt_pa + p->adt_size + PAGE_16K - 1) & ~(PAGE_16K - 1);
 	uintptr_t top = ba_pa + PAGE_16K;
  
@@ -259,7 +294,7 @@ const char *loader_boot(uintptr_t dtb)
  
 	handoff.entry = entry_pa;
 	handoff.boot_args = ba_pa;
-	handoff.fb = (uintptr_t)con_fb + (uint64_t)con_stride * (con_h - 60);	// clean up the bottom of the screen to check log
+	handoff.fb = (uintptr_t)con_fb + (uint64_t)con_stride * (con_h - 60);
 	__asm__ volatile("dsb sy" ::: "memory");
 	int64_t r = (int64_t)smc(PSCI_CPU_ON, XNU_BOOT_MPIDR, (uintptr_t)xnu_big_entry,
 				 (uintptr_t)&handoff);
@@ -272,6 +307,3 @@ const char *loader_boot(uintptr_t dtb)
 	for (;;)
 		__asm__ volatile("msr daifset, #0xf; wfe");
 }
-
-size_t inflate(const void *src, size_t src_size, void *dst, size_t dst_size)
-{
