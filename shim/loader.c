@@ -23,7 +23,7 @@
 #define GZ_SCRATCH_OFF		0x8000000UL	/* phys_base + 128MB */
 
 struct gzhdr {
-	char magic[8];			/* "SWEETGZ1" */
+	char magic[9];			/* "SWEETGZ1" */
 	uint64_t phys_base, mem_size;	/* copied from the payload header, needed before inflating */
 	uint64_t raw_size, comp_size;
 };
@@ -33,7 +33,7 @@ struct payload_seg {
 };
 
 struct payload {
-	char magic[8];
+	char magic[9];
 	uint32_t version, nsegs;
 	uint64_t virt_base, entry_va, adt_off, adt_size, kernel_end;
 	uint64_t phys_base, mem_size;
@@ -82,7 +82,7 @@ static void zero64(uintptr_t dst, uint64_t n)
 static int gz_magic_ok(const char *m)
 {
 	static const char want[] = "POPLARGZ1";
-	for (int i = 0; i < 8; i++)
+	for (int i = 0; i < 9; i++)
 		if (m[i] != want[i])
 			return 0;
 	return 1;
