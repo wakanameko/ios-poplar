@@ -1,0 +1,27 @@
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index 40c94e8..7f57c3b 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -61,7 +61,8 @@
+ MACHINE_FLAGS_ARM64_T6000 = -DARM64_BOARD_CONFIG_T6000 		-mcpu=apple-a14
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
+-MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
++# poplar (Xperia XZ1, MSM8998): Kryo 280 is ARMv8.0 -- no LSE atomics, PAN or UAO
++MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8-a+crypto
+ 
+ 
+ #
+diff --git a/pexpert/pexpert/arm64/SWEET.h b/pexpert/pexpert/arm64/SWEET.h
+index b99c2f4..7bef3ee 100644
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -33,7 +33,7 @@
+ #define __ARM_DEBUG__             7
+ #define __ARM_ENABLE_SWAP__       1
+ #define __ARM_V8_CRYPTO_EXTENSIONS__ 1
+-#define __ARM_PAN_AVAILABLE__     1
++/* poplar: Kryo 280 (Cortex-A73/A53 class) is ARMv8.0, PSTATE.PAN does not exist */
+ #define __ARM_16K_PG__            1
+ 
+ #define HAS_GIC_V3                1
