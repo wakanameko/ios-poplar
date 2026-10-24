@@ -19,7 +19,7 @@
 #define PSCI_CPU_ON		0xc4000003UL	// big側にしか16KBページング対応のコアがなかったので、かなり修正
 
 // gzip
-#define GZ_HDR_SIZE		0x28
+#define GZ_HDR_SIZE		0x30
 #define GZ_SCRATCH_OFF		0x8000000UL	/* phys_base + 128MB */
 
 struct gzhdr {
@@ -57,7 +57,7 @@ struct boot_args {
 	uint64_t bootFlags, memSizeActual;
 };
 
-_Static_assert(__builtin_offsetof(struct payload, segs) == 0x2a8, "payload header layout");
+_Static_assert(__builtin_offsetof(struct payload, segs) == 0x2b0, "payload header layout");
 _Static_assert(sizeof(struct gzhdr) == GZ_HDR_SIZE, "gz header layout");
 _Static_assert(__builtin_offsetof(struct boot_args, Video) == 40, "boot_args layout");
 _Static_assert(__builtin_offsetof(struct boot_args, CommandLine) == 108, "boot_args layout");
