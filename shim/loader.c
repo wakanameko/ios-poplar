@@ -200,6 +200,96 @@ __asm__(
 "	.popsection\n");
 extern char xnu_big_entry[];
 
+// begin code of xnu watching
+static void dc_clean(uintptr_t a, uint64_t n)
+{
+	for (uintptr_t e = a + n, l = a & ~63UL; l < e; l += 64)
+		__asm__ volatile("dc cvac, %0" : : "r"(l) : "memory");
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
+#define MAX_WATCH	32
+#define WATCH_MAX_SIZE	0x400000UL	/* checksum only segments up to 4MB (skip prelinked kexts) */
+static uint64_t seg_sum[MAX_WATCH];
+
+static uint64_t sum64(uintptr_t a, uint64_t n)
+{
+	volatile const uint64_t *w = (volatile const uint64_t *)a;
+	uint64_t s = 0;
+	for (uint64_t i = 0; i < n / 8; i++)
+		s = (s << 1 | s >> 63) ^ w[i];
+	return s;
+}
+
+/* bsd/sys/msgbuf.h: the kernel log ring printf() writes into from early boot. */
+#define MSG_MAGIC	0x063061
+struct msgbuf {
+	int32_t msg_magic, msg_size, msg_bufx, msg_bufr;
+	uint64_t msg_bufc;	/* kernel VA */
+};
+
+/* Find the statically initialised msgbuf in the kernel's own (small) segments. */
+static uintptr_t find_msgbuf(const struct payload *p, uint64_t pa_of_va_base, uint64_t va_lo, uint64_t va_hi)
+{
+	for (uint32_t i = 0; i < p->nsegs; i++) {
+		const struct payload_seg *s = &p->segs[i];
+		if (s->vmsize > WATCH_MAX_SIZE)
+			continue;
+		uintptr_t a = s->vmaddr + pa_of_va_base;
+		for (uint64_t o = 0; o + sizeof(struct msgbuf) <= s->file_size; o += 8) {
+			volatile const struct msgbuf *m = (volatile const struct msgbuf *)(a + o);
+			if (m->msg_magic != MSG_MAGIC)
+				continue;
+			if (m->msg_size < 1024 || m->msg_size > 0x100000 || m->msg_bufx < 0 ||
+			    m->msg_bufx >= m->msg_size || m->msg_bufc < va_lo || m->msg_bufc >= va_hi)
+				continue;
+			return a + o;
+		}
+	}
+	return 0;
+}
+
+/* Redraw the newest part of the kernel log ring (about one screen). */
+static char logcopy[1600];
+static void show_msgbuf(uintptr_t mpa, uint64_t pa_of_va_base, uint64_t secs)
+{
+	volatile const struct msgbuf *m = (volatile const struct msgbuf *)mpa;
+	int32_t size = m->msg_size, x = m->msg_bufx;
+	uintptr_t b = m->msg_bufc + pa_of_va_base;
+	int n = 0, cut = 0;
+
+	dc_clean(b, size);
+	/* oldest-to-newest: [x, size) then [0, x); unwritten bytes are 0 and skipped */
+	for (int32_t k = 0; k < size; k++) {
+		char c = *(volatile const char *)(b + (x + k) % size);
+		if (!c)
+			continue;
+		if (k == 0)
+			cut = 1;		/* ring has wrapped: the oldest line is partial */
+		if (n == (int)sizeof(logcopy)) {	/* keep the newest bytes */
+			cut = 1;
+			for (int j = 0; j < n - 400; j++)
+				logcopy[j] = logcopy[j + 400];
+			n -= 400;
+		}
+		logcopy[n++] = c;
+	}
+	int start = 0;
+	if (n > 1400) {		/* about one screen */
+		start = n - 1400;
+		cut = 1;
+	}
+	if (cut) {		/* begin at a line boundary */
+		while (start < n && logcopy[start] != '\n')
+			start++;
+		if (start < n)
+			start++;
+	}
+	con_clear(0xff000000U);
+	con_hex2("XNULOG", "bufx=", x, "sec=", secs);
+	con_text(logcopy + start, n - start, WHITE);
+} // end of xnu watching
+
 const char *loader_boot(uintptr_t dtb)
 {
 	uint64_t rd_start, rd_end;
@@ -318,6 +408,24 @@ const char *loader_boot(uintptr_t dtb)
  
 	handoff.entry = entry_pa;
 	handoff.boot_args = ba_pa;
+	/* Snapshot what xnu will change: small-segment checksums and its log buffer. */
+	uint64_t va_lo = ~0UL, va_hi = 0;
+	for (uint32_t i = 0; i < p->nsegs; i++) {
+		const struct payload_seg *s = &p->segs[i];
+		if (s->vmaddr < va_lo)
+			va_lo = s->vmaddr;
+		if (s->vmaddr + s->vmsize > va_hi)
+			va_hi = s->vmaddr + s->vmsize;
+		if (i < MAX_WATCH && s->vmsize <= WATCH_MAX_SIZE)
+			seg_sum[i] = sum64(s->vmaddr + pa_of_va_base, s->vmsize);
+	}
+	uintptr_t mpa = find_msgbuf(p, pa_of_va_base, va_lo, va_hi);
+	if (mpa)
+		con_hex2("MSGBUF", "pa4k=", mpa >> 12, "size=",
+			 ((volatile const struct msgbuf *)mpa)->msg_size);
+	else
+		con_str("MSGBUF", "not found");
+
 	handoff.fb = (uintptr_t)con_fb + (uint64_t)con_stride * (con_h - 60);
 	uint64_t cpacr;
 	__asm__ volatile("mrs %0, cpacr_el1" : "=r"(cpacr));
@@ -350,9 +458,33 @@ const char *loader_boot(uintptr_t dtb)
 		con_hex2("BIGCPU", "cpacr=", handoff.cpacr0, "sctlr=", handoff.sctlr0);
 		con_hex2("BIGCPU", "cntfrq=", handoff.cntfrq0, "now=", handoff.cpacr);
 	}
-	int quiet_reported = 0;
+	int quiet_reported = 0, segs_reported = 0;
+	int32_t last_x = -1;
+	uint64_t next_poll = t0;
 	for (;;) {
 		__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t));
+		if (!segs_reported && t - t0 > 5 * f) {
+			/* which kernel segments has xnu written to so far (bit i = segment Si) */
+			uint32_t mask = 0;
+			for (uint32_t i = 0; i < p->nsegs && i < MAX_WATCH; i++) {
+				const struct payload_seg *s = &p->segs[i];
+				if (s->vmsize > WATCH_MAX_SIZE)
+					continue;
+				dc_clean(s->vmaddr + pa_of_va_base, s->vmsize);
+				if (sum64(s->vmaddr + pa_of_va_base, s->vmsize) != seg_sum[i])
+					mask |= 1U << i;
+			}
+			con_hex2("CHANGED", "segs=", mask, "sec=", 5);
+			segs_reported = 1;
+		}
+		if (mpa && t >= next_poll) {
+			next_poll = t + f;
+			dc_clean(mpa, sizeof(struct msgbuf));
+			int32_t x = ((volatile const struct msgbuf *)mpa)->msg_bufx;
+			if (x != last_x && last_x != -1)
+				show_msgbuf(mpa, pa_of_va_base, (t - t0) / f);
+			last_x = x;
+		}
 		if (handoff.exc) {
 			con_hex2("BIGEXC", "slot=", handoff.slot, "sec=", (t - t0) / f);
 			con_hex("ESR", handoff.esr);

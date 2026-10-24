@@ -27,6 +27,72 @@ static const uint32_t pipe_off[8] = {
 volatile uint32_t *con_fb = (volatile uint32_t *)FB_BASE;
 static uint32_t con_bg;
 static int row;
+
+// xnu log watching
+#ifndef LOG_BASE
+#define LOG_BASE	0xffc00000UL	/* DT: pstore_reserve_mem_region_region@ffc00000, 1MB */
+#endif
+#define LOG_SLOT0	(LOG_BASE + 0x1000)
+#define LOG_SLOT_SIZE	0x7f000
+#define LOG_MAGIC	0x31474f4c4c504f50ULL	/* "POPLLOG1" little endian */
+
+static int log_cur = -1, log_prev = -1, log_mute;
+static uint32_t log_len, log_prev_len, log_prev_clean;
+static char linebuf[96];
+static int linelen;
+
+static volatile uint32_t *log_hdr(void) { return (volatile uint32_t *)LOG_BASE; }
+static volatile char *log_slot(int s) { return (volatile char *)(LOG_SLOT0 + (uintptr_t)s * LOG_SLOT_SIZE); }
+
+void con_log_init(void)
+{
+	volatile uint32_t *h = log_hdr();
+
+	log_prev = -1;
+	log_prev_len = 0;
+	log_prev_clean = 0;
+	if (h[0] == (uint32_t)LOG_MAGIC && h[1] == (uint32_t)(LOG_MAGIC >> 32) && h[2] < 2) {
+		log_prev = h[2];
+		log_prev_len = h[3] > LOG_SLOT_SIZE ? LOG_SLOT_SIZE : h[3];
+		log_prev_clean = h[4];
+	}
+	log_cur = log_prev < 0 ? 0 : log_prev ^ 1;
+	log_len = 0;
+	linelen = 0;
+	h[0] = (uint32_t)LOG_MAGIC;
+	h[1] = (uint32_t)(LOG_MAGIC >> 32);
+	h[2] = log_cur;
+	h[3] = 0;
+	h[4] = 0;
+}
+
+static void log_flush(void)
+{
+	if (log_cur >= 0 && !log_mute) {
+		volatile char *b = log_slot(log_cur);
+
+		while (linelen && linebuf[linelen - 1] == ' ')
+			linelen--;
+		if (linelen && log_len + linelen + 1 < LOG_SLOT_SIZE) {
+			for (int i = 0; i < linelen; i++)
+				b[log_len++] = linebuf[i];
+			b[log_len++] = '\n';
+			log_hdr()[3] = log_len;
+		}
+	}
+	linelen = 0;
+}
+
+void con_log_clean(void)
+{
+	if (log_cur >= 0)
+		log_hdr()[4] = 1;
+}
+
+int con_log_prev_unclean(void)
+{
+	return log_prev >= 0 && log_prev_len && !log_prev_clean;
+}
 // フレームバッファ検出コードで使う変数
 int con_w = FB_W, con_h = FB_H, con_stride = FB_STRIDE, con_bpp = FB_BPP;
 uint32_t con_pat = FB_PAT;		// B,G,R,A in memory = 0xAARRGGBB little-endian
@@ -113,6 +179,13 @@ static void put_char(int col, char ch, uint32_t fg)
 {
 	if (ch < 0x20 || ch > 0x7e)
 		ch = '?';
+	if (log_cur >= 0 && !log_mute && col >= 0 && col < (int)sizeof(linebuf) - 1) {
+		while (linelen < col)
+			linebuf[linelen++] = ' ';
+		linebuf[col] = ch;
+		if (col >= linelen)
+			linelen = col + 1;
+	}
 	const unsigned char *g = font8x16[ch - 0x20];
 	int x0 = MARGIN + col * CH_W, y0 = MARGIN + row * CH_H;
 	uint32_t raw_fg = conv(fg), raw_bg = conv(con_bg);
@@ -142,6 +215,13 @@ static void fmt_hex(char *buf, uint64_t v, int digits)
 	buf[digits] = 0;
 }
  
+/* Out of rows: clear and start again at the top, so the newest lines are always visible. */
+static void line_start(void)
+{
+	if (MARGIN + (row + 1) * CH_H > con_h)
+		con_clear(con_bg);
+}
+ 
 void con_skip(void)
 {
 	row++;
@@ -149,8 +229,32 @@ void con_skip(void)
  
 void con_str(const char *label, const char *s)
 {
+	line_start();
 	put_str(0, label, YELLOW);
 	put_str(LABEL_COLS, s, WHITE);
+	log_flush();
+	row++;
+}
+ 
+/* Plain text from column 0, wrapping at the screen edge; '\n' ends a line. */
+void con_text(const volatile char *s, int n, uint32_t fg)
+{
+	int col = 0, cols = (con_w - 2 * MARGIN) / CH_W;
+
+	line_start();
+	for (int i = 0; i < n; i++) {
+		char c = s[i];
+		if (c == '\n' || col == cols) {
+			log_flush();
+			row++;
+			line_start();
+			col = 0;
+			if (c == '\n')
+				continue;
+		}
+		put_char(col++, c == '\t' ? ' ' : c, fg);
+	}
+	log_flush();
 	row++;
 }
  
@@ -164,6 +268,7 @@ void con_hex(const char *label, uint64_t v)
 void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint32_t vb)
 {
 	char buf[9];
+	line_start();
 	int col = put_str(0, label, YELLOW);
 	col = col < LABEL_COLS ? LABEL_COLS : col + 1;
 	col = put_str(col, a, YELLOW);
@@ -174,5 +279,45 @@ void con_hex2(const char *label, const char *a, uint32_t va, const char *b, uint
 		fmt_hex(buf, vb, 8);
 		put_str(col, buf, WHITE);
 	}
+	log_flush();
 	row++;
+}
+
+/* Draw the last max_lines lines of the previous boot's log (not mirrored into the new log). */
+void con_show_prev(int max_lines)
+{
+	if (log_prev < 0 || !log_prev_len) {
+		con_str("PREVLOG", "none");
+		return;
+	}
+	con_str("PREVLOG", log_prev_clean ? "previous boot: clean" : "previous boot: NOT CLEAN");
+	volatile char *b = log_slot(log_prev);
+	uint32_t end = log_prev_len, start = end;
+	int n = 0;
+
+	while (start > 0) {
+		if (b[start - 1] == '\n') {
+			if (n == max_lines)
+				break;
+			n++;
+		}
+		start--;
+	}
+	log_mute = 1;
+	while (start < end) {
+		char tmp[80];
+		int len = 0;
+
+		while (start < end && b[start] != '\n') {
+			if (len < (int)sizeof(tmp) - 1)
+				tmp[len++] = b[start];
+			start++;
+		}
+		start++;
+		tmp[len] = 0;
+		line_start();
+		put_str(0, tmp, GREEN);
+		row++;
+	}
+	log_mute = 0;
 }
