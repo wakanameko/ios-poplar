@@ -87,7 +87,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
 --- a/osfmk/arm64/sweet_early.c
 +++ b/osfmk/arm64/sweet_early.c
 @@ -2,7 +2,8 @@
-  * Redmi Note 10 Pro bootstrap console. No allocation, locks, ADT parsing or
+  * Xperia XZ1 (poplar) bootstrap console. No allocation, locks, ADT parsing or
   * per-CPU state: panic() can reach this before a current thread exists.
   * start.s maps the splash framebuffer VA=PA as Normal Non-Cacheable memory.
 - * Stop using that mapping before arm_vm_init tears down bootstrap TTBR0.
@@ -96,17 +96,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
   */
  #include <arm64/sweet_early.h>
  
-@@ -10,7 +11,8 @@
- #include <stdint.h>
- #include <kern/misc_protos.h>
- 
--#define EARLY_FB ((volatile uint32_t *)(uintptr_t)0x9c000000)
-+static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
-+#define EARLY_FB early_fb
- #define EARLY_WIDTH 1080u
- #define EARLY_HEIGHT 2400u
- #define EARLY_STRIDE (4320u / 4)
-@@ -87,18 +89,21 @@
+@@ -102,18 +103,21 @@
  void
  sweet_early_mark(unsigned int stage, const char *label)
  {
@@ -119,7 +109,7 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
  	for (unsigned int y = EARLY_HEIGHT - 32; y < EARLY_HEIGHT; y++) {
 -		for (unsigned int x = stage * 64; x < (stage + 1) * 64; x++) {
 +		for (unsigned int x = stage * 48; x < (stage + 1) * 48; x++) {
- 			EARLY_FB[y * EARLY_STRIDE + x] = color;
+ 			early_px(x, y, color);
  		}
  	}
  	__asm__ volatile("dsb sy" ::: "memory");
@@ -132,22 +122,23 @@ diff --git a/osfmk/arm64/sweet_early.c b/osfmk/arm64/sweet_early.c
  	sweet_early_string(": ");
  	sweet_early_string(label);
  	sweet_early_putc('\n');
-@@ -121,9 +126,17 @@
+@@ -136,9 +140,18 @@
  }
  
  void
+-sweet_early_disable(void)
 +sweet_early_relocate(uint64_t base)
-+{
-+	sweet_early_mark(8, "leaving bootstrap TTBR0");
-+	early_fb = (volatile uint32_t *)(uintptr_t)base;
+ {
+ 	sweet_early_mark(8, "leaving bootstrap TTBR0");
++	/* base maps the whole 32MB block; the framebuffer starts inside it */
++	early_fb = (volatile uint8_t *)(uintptr_t)(base + (EARLY_FB_PA - EARLY_FB_BLOCK));
 +	__asm__ volatile("dsb sy" ::: "memory");
 +	sweet_early_mark(9, "kernel framebuffer VA live");
 +}
 +
 +void
- sweet_early_disable(void)
- {
--	sweet_early_mark(8, "leaving bootstrap TTBR0");
++sweet_early_disable(void)
++{
  	early_disabled = 1;
  	__asm__ volatile("dsb sy" ::: "memory");
  }
@@ -221,10 +212,11 @@ diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
  #include <pexpert/arm/protos.h>
  #include <kern/sched_prim.h>
  #if HIBERNATION
-@@ -833,7 +834,9 @@
- 	if (!fbcon_width || !fbcon_height || fbcon_stride < fbcon_width * 4) {
+@@ -846,8 +847,10 @@
+ 	if (!fbcon_width || !fbcon_height || fbcon_stride < fbcon_width * 3) {
  		return;
  	}
+ 	fbcon_bpp = fbcon_stride >= fbcon_width * 4 ? 4 : 3;
 +	sweet_early_mark(17, "fbcon config read; mapping");
  	fbcon_base = (volatile uint32_t *)ml_io_map_wcomb(reg[0], reg[1]);
 +	sweet_early_mark(18, "fbcon mapping returned");
