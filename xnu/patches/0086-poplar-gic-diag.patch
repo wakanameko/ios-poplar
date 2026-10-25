@@ -1,12 +1,12 @@
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
-index 6089db9..29797c4 100644
+index 6089db9..9ecd7ab 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
 @@ -11,6 +11,7 @@
  #include <machine/machine_routines.h>
  #include <pexpert/device_tree.h>
  #include <pexpert/arm64/board_config.h>
-+#include <kern/misc_protos.h>
++#include <pexpert/protos.h>         /* printf, as in pe_init.c */
  
  
  #if HAS_GIC_V3
