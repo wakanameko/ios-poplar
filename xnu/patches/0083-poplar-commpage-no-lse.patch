@@ -1,0 +1,48 @@
+diff --git a/osfmk/arm/commpage/commpage_asm.s b/osfmk/arm/commpage/commpage_asm.s
+index da0bbba..5577327 100644
+--- a/osfmk/arm/commpage/commpage_asm.s
++++ b/osfmk/arm/commpage/commpage_asm.s
+@@ -273,7 +273,21 @@ _pfz_trylock_and_enqueue:
+ 	mov		w11, #1			 // locked value = w11 = 1
+ 
+ 	// Try to grab the lock
++#if defined(__ARM_FEATURE_ATOMICS)
+ 	casa	w10, w11, [x3]	 // Atomic CAS with acquire barrier
++#else
++	/*
++	 * ARMv8.0 cores (poplar's Kryo 280) have no CASA: the same acquire CAS as an
++	 * exclusive pair. x15 is the PFZ preemption flag, so only w12/w13 are used.
++	 */
++1:	ldaxr	w12, [x3]
++	cmp	w12, w10
++	b.ne	2f
++	stxr	w13, w11, [x3]
++	cbnz	w13, 1b
++2:	clrex
++	mov	w10, w12		 // old value, like CASA
++#endif
+ 	cbz		w10, Ltrylock_enqueue_success
+ 
+ 	mov		x0, #-1			// Failed
+@@ -323,7 +337,21 @@ _pfz_trylock_and_dequeue:
+ 	mov		w10, wzr		 // unlock value = w10 = 0
+ 	mov		w11, #1			 // locked value = w11 = 1
+ 
++#if defined(__ARM_FEATURE_ATOMICS)
+ 	casa	w10, w11, [x2]	 // Atomic CAS with acquire barrier
++#else
++	/*
++	 * ARMv8.0 cores (poplar's Kryo 280) have no CASA: the same acquire CAS as an
++	 * exclusive pair. x15 is the PFZ preemption flag, so only w12/w13 are used.
++	 */
++1:	ldaxr	w12, [x2]
++	cmp	w12, w10
++	b.ne	2f
++	stxr	w13, w11, [x2]
++	cbnz	w13, 1b
++2:	clrex
++	mov	w10, w12		 // old value, like CASA
++#endif
+ 	cbz		w10, Ltrylock_dequeue_success
+ 
+ 	mov		x0, #-1			// Failed
