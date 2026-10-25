@@ -1,0 +1,40 @@
+diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
+index 6089db9..29797c4 100644
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -11,6 +11,7 @@
+ #include <machine/machine_routines.h>
+ #include <pexpert/device_tree.h>
+ #include <pexpert/arm64/board_config.h>
++#include <kern/misc_protos.h>
+ 
+ 
+ #if HAS_GIC_V3
+@@ -176,6 +177,17 @@ pe_init_fiq()
+ 		gicr_write32(GICR_IPRIORITYR0 + i, 0xA0A0A0A0);
+ 	}
+ 	gicr_write32(GICR_ISENABLER0, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
++	__builtin_arm_dsb(DSB_SY);
++	/*
++	 * poplar bring-up: the shim found every redistributor untouched after xnu hung.
++	 * Show which frame this CPU picked and whether the writes above read back.
++	 */
++	printf("SWEET GIC: mpidr=0x%llx gicr va=0x%lx size=0x%lx pe=+0x%lx typer=0x%llx\n",
++	    __builtin_arm_rsr64("MPIDR_EL1"), (unsigned long)gicr_base, (unsigned long)gicr_size,
++	    (unsigned long)(gicr_pe_base - gicr_base), gicr_read64(GICR_TYPER));
++	printf("SWEET GIC: readback en=0x%x prio16=0x%x waker=0x%x (want en bits %u and %u)\n",
++	    gicr_read32(GICR_ISENABLER0), gicr_read32(GICR_IPRIORITYR0 + 16), gicr_read32(GICR_WAKER),
++	    sweet_vtimer_intid, SWEET_IPI_SGI);
+ #else
+ 	// Configure timers and legacy FIQ to be group 0
+ 	gicr_write32(GICR_IGROUPR0, 0x81FFFFFF);
+@@ -213,6 +225,9 @@ pe_init_fiq()
+ 	}
+ 	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
+ 	__builtin_arm_isb(ISB_SY);
++	printf("SWEET GIC: gicd ctlr=0x%x sre=0x%llx pmr=0x%llx igrpen1=0x%llx ctlr_el1=0x%llx\n",
++	    gicd_read32(GICD_CTLR), __builtin_arm_rsr64("ICC_SRE_EL1"), __builtin_arm_rsr64("ICC_PMR_EL1"),
++	    __builtin_arm_rsr64("ICC_IGRPEN1_EL1"), __builtin_arm_rsr64("ICC_CTLR_EL1"));
+ #else
+ 	// Enable the forwarding of the vtimer interrupt
+ 	uint32_t gicd_ctlr = gicd_read32(GICD_CTLR);
