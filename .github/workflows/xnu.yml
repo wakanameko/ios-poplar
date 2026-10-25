@@ -51,8 +51,9 @@ jobs:
           # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
           # sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
           # grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
-          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64" "OTHER_CFLAGS[arch=arm64]=\\$(inherited) -mcpu=cortex-a73+crypto"/' dxb/build.sh
-          grep -c 'OTHER_CFLAGS\[arch=arm64\]' dxb/build.sh
+          printf 'OTHER_CFLAGS[arch=arm64] = $(inherited) -mcpu=cortex-a73+crypto\n' > dxb/firehose-armv8.0.xcconfig
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64" -xcconfig "${WORK_DIR}\/firehose-armv8.0.xcconfig"/' dxb/build.sh
+          grep -c 'firehose-armv8.0.xcconfig' dxb/build.sh
           ls dxb/patches
 
       - name: Deps
