@@ -1,0 +1,21 @@
+diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
+index 6089db9..63de9e3 100644
+--- a/pexpert/arm/pe_fiq.c
++++ b/pexpert/arm/pe_fiq.c
+@@ -165,6 +165,16 @@ pe_init_fiq()
+ 	}
+ 
+ #if defined(SWEET)
++	/*
++	 * poplar: enable the system register interface BEFORE touching this PE's SGI/PPI
++	 * frame. While ICC_SRE_EL1.SRE is still 0 on a core that PSCI CPU_ON just powered up,
++	 * MSM8998 ignores writes to GICR_ISENABLER0/IPRIORITYR (they read back 0), so the
++	 * timer and SGI1 were never enabled and xnu hung in its first IOSleep(). Writes made
++	 * after SRE=1 stick (seen from the little core). Setting SRE first is harmless on sweet.
++	 */
++	__builtin_arm_wsr64("ICC_SRE_EL1", __builtin_arm_rsr64("ICC_SRE_EL1") | ICC_SRE_SRE);
++	__builtin_arm_isb(ISB_SY);
++
+ 	/*
+ 	 * Real hardware with two security states: Group 0 is TrustZone's and
+ 	 * non-secure writes to it are ignored. Everything we own is Group 1 NS
