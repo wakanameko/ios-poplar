@@ -1,0 +1,58 @@
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+index 2545cf9..d9248b2 100644
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -73,8 +73,8 @@ SweetCPU::start(IOService *provider)
+ 	if (*(const uint32_t *)reg->getBytesNoCopy() != cpu->phys_id) {
+ 		return false;
+ 	}
+-	/* MPIDR Aff1 = core: 0x000-0x500 A55, 0x600/0x700 A76 */
+-	if (cpu->phys_id > 0x700 || (cpu->phys_id & 0xff) != 0 ||
++	/* poplar: xnu runs on the Kryo 280 Gold (16K-capable) cluster only, MPIDR 0x100-0x103 */
++	if (cpu->phys_id < 0x100 || cpu->phys_id > 0x103 ||
+ 	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
+ 		panic("SWEET CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
+@@ -82,7 +82,7 @@ SweetCPU::start(IOService *provider)
+ 	if (!IOCPU::start(provider)) {
+ 		return false;
+ 	}
+-	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
++	cpuName = OSSymbol::withCStringNoCopy("Kryo 280");
+ 	if (cpuName == NULL) {
+ 		return false;
+ 	}
+@@ -145,8 +145,9 @@ SweetCPU::startAll(void *arg __unused, wait_result_t result __unused)
+ 		IOSleep(1);
+ 	}
+ 	/* The supplied ADT has cpu0 as the boot CPU and ascending A55 nodes. */
+-	if (topology->boot_cpu->cpu_id != 0 || topology->boot_cpu->phys_id != 0) {
+-		panic("SWEET CPU: expected boot MPIDR 0 and logical CPU 0");
++	/* poplar: the shim starts xnu on MPIDR 0x100 (first Gold core) as logical CPU 0. */
++	if (topology->boot_cpu->cpu_id != 0 || topology->boot_cpu->phys_id != 0x100) {
++		panic("SWEET CPU: expected boot MPIDR 0x100 and logical CPU 0");
+ 	}
+ 	for (unsigned int i = 0; i < topology->num_cpus; i++) {
+ 		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
+@@ -234,7 +235,7 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ {
+ 	const ml_topology_cpu_t *cpu = &ml_get_topology_info()->cpus[getCPUNumber()];
+ 	/* cpu_start() passes NULL,NULL: x20/x21 are set by LowResetVectorBase. */
+-	if (start_paddr != 0 || arg_paddr != 0 || cpu->phys_id == 0 ||
++	if (start_paddr != 0 || arg_paddr != 0 || cpu->phys_id == 0x100 ||
+ 	    __atomic_load_n(&initialized, __ATOMIC_ACQUIRE) != 0) {
+ 		panic("SWEET CPU: cpu=%u unsupported restart", getCPUNumber());
+ 	}
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 92f3e26..e96daf9 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -44,7 +44,7 @@ const char * gIOKernelConfigTables =
+     "   {"
+     "     'IOClass'         = SweetCPU;"
+     "     'IOProviderClass' = IOPlatformDevice;"
+-    "     'IONameMatch'     = 'qcom,kryo470';"
++    "     'IONameMatch'     = 'qcom,kryo280';"
+     "     'IOProbeScore'    = 10000:32;"
+     "   },"
+     "   {"
