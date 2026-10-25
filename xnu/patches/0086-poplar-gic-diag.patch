@@ -1,5 +1,5 @@
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
-index 6089db9..cb3dda5 100644
+index 6089db9..dd0157f 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index 6089db9..cb3dda5 100644
  
  
  #if HAS_GIC_V3
-@@ -176,6 +177,17 @@ pe_init_fiq()
+@@ -176,6 +177,24 @@ pe_init_fiq()
  		gicr_write32(GICR_IPRIORITYR0 + i, 0xA0A0A0A0);
  	}
  	gicr_write32(GICR_ISENABLER0, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
@@ -25,10 +25,17 @@ index 6089db9..cb3dda5 100644
 +	printf("SWEET GIC: readback en=0x%x prio16=0x%x waker=0x%x (want en bits %u and %u)\n",
 +	    gicr_read32(GICR_ISENABLER0), gicr_read32(GICR_IPRIORITYR0 + 16), gicr_read32(GICR_WAKER),
 +	    sweet_vtimer_intid, SWEET_IPI_SGI);
++	/*
++	 * Is the SGI/PPI frame (+0x10000) really this PE's? The shim saw ISPENDR0 = 0x40280002
++	 * (vtimer + SGI1 pending) there; PIDR2 reads 0x3B/0x4B in a real GICv3/v4 frame.
++	 */
++	printf("SWEET GIC: pa rd=0x%lx sgi=0x%lx ispend=0x%x pidr2 rd=0x%x sgi=0x%x\n",
++	    (unsigned long)ml_vtophys(gicr_pe_base), (unsigned long)ml_vtophys(gicr_pe_base + 0x10000),
++	    gicr_read32(0x10200), gicr_read32(0xFFE8), gicr_read32(0x1FFE8));
  #else
  	// Configure timers and legacy FIQ to be group 0
  	gicr_write32(GICR_IGROUPR0, 0x81FFFFFF);
-@@ -213,6 +225,16 @@ pe_init_fiq()
+@@ -213,6 +232,16 @@ pe_init_fiq()
  	}
  	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
  	__builtin_arm_isb(ISB_SY);
