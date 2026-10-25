@@ -1,5 +1,5 @@
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
-index 6089db9..dd0157f 100644
+index 6089db9..f6b89d0 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
 @@ -11,6 +11,7 @@
@@ -10,7 +10,7 @@ index 6089db9..dd0157f 100644
  
  
  #if HAS_GIC_V3
-@@ -176,6 +177,24 @@ pe_init_fiq()
+@@ -176,6 +177,34 @@ pe_init_fiq()
  		gicr_write32(GICR_IPRIORITYR0 + i, 0xA0A0A0A0);
  	}
  	gicr_write32(GICR_ISENABLER0, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
@@ -32,10 +32,20 @@ index 6089db9..dd0157f 100644
 +	printf("SWEET GIC: pa rd=0x%lx sgi=0x%lx ispend=0x%x pidr2 rd=0x%x sgi=0x%x\n",
 +	    (unsigned long)ml_vtophys(gicr_pe_base), (unsigned long)ml_vtophys(gicr_pe_base + 0x10000),
 +	    gicr_read32(0x10200), gicr_read32(0xFFE8), gicr_read32(0x1FFE8));
++	/*
++	 * Software says the SGI frame VA maps to 0x17b90000; ask the MMU itself (AT S1E1W)
++	 * for each 64KB step, and read the next PE's TYPER (+0x20000) as a far-page control.
++	 */
++	for (unsigned int k = 0; k < 4; k++) {
++		uint64_t par;
++		__asm__ volatile ("at s1e1w, %1; isb; mrs %0, par_el1" : "=r"(par) : "r"(gicr_pe_base + k * 0x10000UL) : "memory");
++		printf("SWEET GIC: +0x%x par=0x%llx\n", k * 0x10000, par);
++	}
++	printf("SWEET GIC: next PE typer=0x%llx\n", gicr_read64(0x20000 + GICR_TYPER));
  #else
  	// Configure timers and legacy FIQ to be group 0
  	gicr_write32(GICR_IGROUPR0, 0x81FFFFFF);
-@@ -213,6 +232,16 @@ pe_init_fiq()
+@@ -213,6 +242,16 @@ pe_init_fiq()
  	}
  	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
  	__builtin_arm_isb(ISB_SY);
