@@ -1,5 +1,5 @@
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
-index 6089db9..9ecd7ab 100644
+index 6089db9..cb3dda5 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
 @@ -11,6 +11,7 @@
@@ -28,13 +28,20 @@ index 6089db9..9ecd7ab 100644
  #else
  	// Configure timers and legacy FIQ to be group 0
  	gicr_write32(GICR_IGROUPR0, 0x81FFFFFF);
-@@ -213,6 +225,9 @@ pe_init_fiq()
+@@ -213,6 +225,16 @@ pe_init_fiq()
  	}
  	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
  	__builtin_arm_isb(ISB_SY);
 +	printf("SWEET GIC: gicd ctlr=0x%x sre=0x%llx pmr=0x%llx igrpen1=0x%llx ctlr_el1=0x%llx\n",
 +	    gicd_read32(GICD_CTLR), __builtin_arm_rsr64("ICC_SRE_EL1"), __builtin_arm_rsr64("ICC_PMR_EL1"),
 +	    __builtin_arm_rsr64("ICC_IGRPEN1_EL1"), __builtin_arm_rsr64("ICC_CTLR_EL1"));
++	/* Hold the three lines on screen: the console wraps long before xnu hangs. */
++	printf("SWEET GIC: pausing 15 s\n");
++	uint64_t sweet_pause;
++	nanoseconds_to_deadline(15000000000ULL, &sweet_pause);
++	while (mach_absolute_time() < sweet_pause) {
++		;
++	}
  #else
  	// Enable the forwarding of the vtimer interrupt
  	uint32_t gicd_ctlr = gicd_read32(GICD_CTLR);
