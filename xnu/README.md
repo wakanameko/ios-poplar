@@ -8,3 +8,8 @@ Built on GitHub's macOS arm64 runners by `.github/workflows/xnu.yml`, using
 - Output: `kernel.<config>.vmapple` (later: our own SWEET machine config) as a workflow artifact.
 
 Fetch the latest build: `gh run download -R dipa-studio/ios-sweet -n xnu-kernel -D xnu/out`
+
+# XNU for Poplar
+
+Defferences:
+- (ill write descriptions added patches)
