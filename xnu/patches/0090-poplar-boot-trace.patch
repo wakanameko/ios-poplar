@@ -1,0 +1,62 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index bb2a2bf..708bb23 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -490,9 +490,16 @@ bsd_init(void)
+ 	platform_stall_panic_or_spin(PLATFORM_STALL_XNU_LOCATION_BSD_INIT);
+ #endif
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/* poplar boot trace: bsd_init milestones on the screen console */
++#define DEBUG_BSDINIT 1
++#else
+ #define DEBUG_BSDINIT 0
++#endif
+ 
+-#if DEBUG_BSDINIT
++#if DEBUG_BSDINIT && defined(ARM64_BOARD_CONFIG_SWEET)
++#define bsd_init_kprintf(x, ...) printf("bsd_init: " x, ## __VA_ARGS__)
++#elif DEBUG_BSDINIT
+ #define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
+ #else
+ #define bsd_init_kprintf(x, ...)
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index 0160ac6..2082692 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -876,6 +876,8 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
+ }
+ 
+ #if defined(SWEET)
++#include <kern/task.h>         /* get_bsdtask_info, task_pid (boot trace) */
++extern char *proc_name_address(void *p);
+ extern int _sweet_lse_b(user_addr_t, uint32_t, uint64_t, uint64_t, uint64_t *);
+ extern int _sweet_lse_h(user_addr_t, uint32_t, uint64_t, uint64_t, uint64_t *);
+ extern int _sweet_lse_w(user_addr_t, uint32_t, uint64_t, uint64_t, uint64_t *);
+@@ -963,8 +965,26 @@ handle_uncategorized(arm_saved_state_t *state)
+ 
+ #if defined(SWEET)
+ 	if (PSR64_IS_USER64(get_saved_state_cpsr(state)) && sweet_emulate_lse(state, instr)) {
++		/* poplar boot trace: show that user space runs and the emulation works */
++		static uint64_t _Atomic sweet_lse_count;
++		uint64_t n = os_atomic_inc(&sweet_lse_count, relaxed);
++		if (n == 1 || (n >= 1024 && (n & (n - 1)) == 0)) {
++			void *bp = get_bsdtask_info(current_task());
++			printf("SWEET LSE: %llu emulated (now %s[%d] instr 0x%08x)\n", n,
++			    bp ? proc_name_address(bp) : "?", task_pid(current_task()), instr);
++		}
+ 		return;
+ 	}
++	if (!PSR64_IS_KERNEL(get_saved_state_cpsr(state))) {
++		/* poplar boot trace: user undefined instructions that stay SIGILL */
++		static uint32_t _Atomic sweet_undef_count;
++		if (os_atomic_inc(&sweet_undef_count, relaxed) <= 64) {
++			void *bp = get_bsdtask_info(current_task());
++			printf("SWEET UNDEF: %s[%d] pc=0x%llx instr=0x%08x\n",
++			    bp ? proc_name_address(bp) : "?", task_pid(current_task()),
++			    (uint64_t)get_saved_state_pc(state), instr);
++		}
++	}
+ #endif
+ 
+ #if CONFIG_DTRACE
